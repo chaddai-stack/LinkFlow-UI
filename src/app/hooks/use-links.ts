@@ -2,9 +2,11 @@
 import { toast } from 'sonner';
 import {
   api,
+  type BulkCreateLinksPayload,
   type CreateLinkPayload,
   type Link,
   type LinkListParams,
+  type LinkStatus,
   type UpdateLinkPayload,
   type UpdateLinkStatusPayload,
 } from '../services/linkflow-api';
@@ -83,6 +85,51 @@ export function useCreateLink() {
     },
     onError: (error: Error) => {
       toast.error(`Create failed: ${error.message}`);
+    },
+  });
+}
+
+export function useCreateBulkLinks() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: BulkCreateLinksPayload) => api.createBulkLinks(payload),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: linkKeys.lists() });
+      toast.success(`Bulk finished: ${data.succeeded} succeeded, ${data.failed} failed.`);
+    },
+    onError: (error: Error) => {
+      toast.error(`Bulk import failed: ${error.message}`);
+    },
+  });
+}
+
+export function useBulkUpdateLinkStatus() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ linkIds, status }: { linkIds: string[]; status: LinkStatus }) => api.bulkUpdateLinkStatus(linkIds, status),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: linkKeys.lists() });
+      toast.success(`Bulk update finished: ${data.succeeded} succeeded, ${data.failed} failed.`);
+    },
+    onError: (error: Error) => {
+      toast.error(`Bulk update failed: ${error.message}`);
+    },
+  });
+}
+
+export function useBulkDeleteLinks() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (linkIds: string[]) => api.bulkDeleteLinks(linkIds),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: linkKeys.lists() });
+      toast.success(`Bulk delete finished: ${data.succeeded} succeeded, ${data.failed} failed.`);
+    },
+    onError: (error: Error) => {
+      toast.error(`Bulk delete failed: ${error.message}`);
     },
   });
 }

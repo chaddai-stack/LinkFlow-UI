@@ -149,6 +149,52 @@ export interface CreateLinkPayload {
   metadata?: Record<string, unknown>;
 }
 
+export interface BulkCreateLinkItemPayload extends CreateLinkPayload {}
+
+export interface BulkCreateLinksPayload {
+  mode?: string;
+  items: BulkCreateLinkItemPayload[];
+}
+
+export interface BulkLinkItemResult {
+  id: string;
+  index: number;
+  status: 'pending' | 'succeeded' | 'failed';
+  originalUrl: string;
+  linkId?: string;
+  shortUrl?: string;
+  riskLevel?: 'unknown' | 'low' | 'medium' | 'high' | 'critical';
+  riskScore?: number;
+  category?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface BulkLinkJobResult {
+  jobId: string;
+  status: 'running' | 'succeeded' | 'partial_failed' | 'failed';
+  total: number;
+  succeeded: number;
+  failed: number;
+  items: BulkLinkItemResult[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface BulkLinkActionItemResult {
+  linkId: string;
+  status: 'succeeded' | 'failed';
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface BulkLinkActionResult {
+  total: number;
+  succeeded: number;
+  failed: number;
+  items: BulkLinkActionItemResult[];
+}
+
 export interface UpdateLinkPayload {
   title?: string;
   originalUrl?: string;
@@ -302,6 +348,10 @@ export const backendCapabilities = {
   linksCreate: {
     available: true,
     summary: 'Short URL creation is wired to POST /api/v1/links.',
+  },
+  linksBulk: {
+    available: true,
+    summary: 'Bulk link creation is wired to POST /api/v1/links/bulk and returns per-item scan and classification results.',
   },
   linksList: {
     available: true,
@@ -966,6 +1016,57 @@ function mapRiskScanTask(source: RawRecord): RiskScanTask {
   };
 }
 
+function mapBulkLinkItem(source: RawRecord): BulkLinkItemResult {
+  return {
+    id: String(source.id ?? ''),
+    index: readNumber(source.index),
+    status: String(source.status ?? 'pending') as BulkLinkItemResult['status'],
+    originalUrl: String(source.long_url ?? source.longUrl ?? ''),
+    linkId: normalizeOptionalString(source.link_id ?? source.linkId),
+    shortUrl: normalizeOptionalString(source.short_url ?? source.shortUrl),
+    riskLevel: normalizeOptionalString(source.risk_level ?? source.riskLevel) as BulkLinkItemResult['riskLevel'],
+    riskScore: source.risk_score === undefined && source.riskScore === undefined
+      ? undefined
+      : readNumber(source.risk_score ?? source.riskScore),
+    category: normalizeOptionalString(source.category),
+    errorCode: normalizeOptionalString(source.error_code ?? source.errorCode),
+    errorMessage: normalizeOptionalString(source.error_message ?? source.errorMessage),
+  };
+}
+
+function mapBulkLinkJob(source: RawRecord): BulkLinkJobResult {
+  const items = Array.isArray(source.items) ? source.items as RawRecord[] : [];
+  return {
+    jobId: String(source.job_id ?? source.jobId ?? ''),
+    status: String(source.status ?? 'running') as BulkLinkJobResult['status'],
+    total: readNumber(source.total),
+    succeeded: readNumber(source.succeeded),
+    failed: readNumber(source.failed),
+    items: items.map(mapBulkLinkItem),
+    createdAt: normalizeOptionalString(source.created_at ?? source.createdAt),
+    updatedAt: normalizeOptionalString(source.updated_at ?? source.updatedAt),
+  };
+}
+
+function mapBulkLinkActionItem(source: RawRecord): BulkLinkActionItemResult {
+  return {
+    linkId: String(source.link_id ?? source.linkId ?? ''),
+    status: String(source.status ?? 'failed') as BulkLinkActionItemResult['status'],
+    errorCode: normalizeOptionalString(source.error_code ?? source.errorCode),
+    errorMessage: normalizeOptionalString(source.error_message ?? source.errorMessage),
+  };
+}
+
+function mapBulkLinkAction(source: RawRecord): BulkLinkActionResult {
+  const items = Array.isArray(source.items) ? source.items as RawRecord[] : [];
+  return {
+    total: readNumber(source.total),
+    succeeded: readNumber(source.succeeded),
+    failed: readNumber(source.failed),
+    items: items.map(mapBulkLinkActionItem),
+  };
+}
+
 function mapBackendHealth(source: RawRecord): BackendHealth {
   return {
     status: String(source.status ?? 'UNKNOWN'),
@@ -1042,6 +1143,13 @@ function serializeCreateLinkPayload(payload: CreateLinkPayload): RawRecord {
     expires_at: toIsoDate(payload.expiresAt),
     tags: payload.tags ?? [],
     metadata: payload.metadata ?? {},
+  };
+}
+
+function serializeBulkCreateLinksPayload(payload: BulkCreateLinksPayload): RawRecord {
+  return {
+    mode: payload.mode ?? 'create_scan_classify',
+    items: payload.items.map(serializeCreateLinkPayload),
   };
 }
 
@@ -1166,6 +1274,43 @@ export const api = {
     });
 
     return mapLink(data);
+  },
+
+  async createBulkLinks(payload: BulkCreateLinksPayload): Promise<BulkLinkJobResult> {
+    const data = await request<RawRecord>('/api/v1/links/bulk', {
+      method: 'POST',
+      body: JSON.stringify(serializeBulkCreateLinksPayload(payload)),
+    });
+
+    return mapBulkLinkJob(data);
+  },
+
+  async getBulkLinkJob(id: string): Promise<BulkLinkJobResult> {
+    const data = await request<RawRecord>(`/api/v1/links/bulk/${encodeURIComponent(id)}`);
+    return mapBulkLinkJob(data);
+  },
+
+  async bulkUpdateLinkStatus(linkIds: string[], status: LinkStatus): Promise<BulkLinkActionResult> {
+    const data = await request<RawRecord>('/api/v1/links/bulk/status', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        link_ids: linkIds,
+        status,
+      }),
+    });
+
+    return mapBulkLinkAction(data);
+  },
+
+  async bulkDeleteLinks(linkIds: string[]): Promise<BulkLinkActionResult> {
+    const data = await request<RawRecord>('/api/v1/links/bulk', {
+      method: 'DELETE',
+      body: JSON.stringify({
+        link_ids: linkIds,
+      }),
+    });
+
+    return mapBulkLinkAction(data);
   },
 
   async previewLinkTitle(originalUrl: string): Promise<TitlePreviewResponse> {
